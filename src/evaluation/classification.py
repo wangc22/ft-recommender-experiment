@@ -25,14 +25,25 @@ def parse_label(prediction_text: str, valid_labels: list[str]) -> str | None:
 
 
 def predict_batch(model, tokenizer, prompts: list[str],
-                  batch_size: int = 8, max_new_tokens: int = 32) -> list[str]:
+                  batch_size: int = 8, max_new_tokens: int = 32,
+                  max_input_length: int = 2048) -> list[str]:
+    """Greedy-decode each prompt; return only the generated continuation.
+
+    Uses token-level slicing at the (left-padded) prompt boundary — robust to
+    variable prompt lengths within a batch. The earlier string-based
+    `full.startswith(decoded_input)` heuristic was fragile for short samples
+    in the same batch (decoded_input would resolve to all-pad → empty string,
+    causing the entire prompt+completion to be returned and the label parser
+    matching labels embedded in the prompt's label list).
+    """
     model.eval()
     device = next(model.parameters()).device
     outputs = []
     for i in range(0, len(prompts), batch_size):
         batch = prompts[i:i + batch_size]
         enc = tokenizer(batch, padding=True, truncation=True,
-                        max_length=1024, return_tensors="pt").to(device)
+                        max_length=max_input_length, return_tensors="pt").to(device)
+        prompt_len = enc["input_ids"].shape[1]  # padded length; same for all rows
         with torch.no_grad():
             gen = model.generate(
                 **enc,
@@ -40,16 +51,9 @@ def predict_batch(model, tokenizer, prompts: list[str],
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id,
             )
-        for j, prompt in enumerate(batch):
-            input_len = enc["input_ids"][j].ne(tokenizer.pad_token_id).sum().item()
-            full_decoded = tokenizer.decode(gen[j], skip_special_tokens=True)
-            decoded_input = tokenizer.decode(enc["input_ids"][j][:input_len],
-                                             skip_special_tokens=True)
-            if full_decoded.startswith(decoded_input):
-                completion = full_decoded[len(decoded_input):]
-            else:
-                completion = tokenizer.decode(gen[j][enc["input_ids"].shape[1]:],
-                                              skip_special_tokens=True)
+        for j in range(len(batch)):
+            completion_ids = gen[j][prompt_len:]
+            completion = tokenizer.decode(completion_ids, skip_special_tokens=True)
             outputs.append(completion.strip())
     return outputs
 

@@ -1,6 +1,8 @@
 kind: classification
 dataset_id: theatticusproject/cuad-qa
-max_length: 512
+# Empirically measured: 10-label + 2000-char clause input → 533 tokens worst case.
+# 768 leaves headroom and avoids truncating long clauses.
+max_length: 768
 
 training:
   pilot_epochs: 1

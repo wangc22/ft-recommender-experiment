@@ -22,8 +22,23 @@ OUT_DIR = Path("outputs/aggregated")
 def main():
     if not Path(ALL_RUNS_PATH).exists():
         raise SystemExit(f"Missing {ALL_RUNS_PATH}. Run scripts/run_matrix.py first.")
-    records = load_jsonl(ALL_RUNS_PATH)
-    logger.info(f"Loaded {len(records)} run records.")
+    raw = load_jsonl(ALL_RUNS_PATH)
+    logger.info(f"Loaded {len(raw)} raw run records.")
+
+    # Deduplicate on (task, method, run_type, seed) — keeping the LAST entry per
+    # key. Necessary because run_one appends to all_runs.jsonl and reruns for the
+    # same triple would otherwise inflate composite scores.
+    by_key: dict = {}
+    for r in raw:
+        key = (r.get("task"), r.get("method"), r.get("run_type"), r.get("seed"))
+        by_key[key] = r
+    records = list(by_key.values())
+    n_dropped = len(raw) - len(records)
+    if n_dropped > 0:
+        logger.warning(
+            f"Dropped {n_dropped} duplicate row(s); kept {len(records)} unique runs. "
+            "Last-write-wins per (task, method, run_type, seed)."
+        )
 
     scored = compute_composite(records)
 

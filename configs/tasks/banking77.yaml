@@ -1,6 +1,8 @@
 kind: classification
 dataset_id: PolyAI/banking77
-max_length: 256
+# Empirically measured: 77-label prompt = 404 tokens; +completion+buffer = ~440.
+# 512 fits comfortably with no truncation.
+max_length: 512
 
 training:
   pilot_epochs: 1

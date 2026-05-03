@@ -47,6 +47,18 @@ def main():
             print(f"  [{i}/{len(runs)}] task={t} scale={s} method={m} seed={seed}")
         return
 
+    # Pre-flight: warn if all_runs.jsonl already has rows (would cause duplicates
+    # in analyze_results.py and corrupt composite scores).
+    all_runs_path = Path("outputs/aggregated/all_runs.jsonl")
+    if all_runs_path.exists() and all_runs_path.stat().st_size > 0:
+        n_existing = sum(1 for _ in open(all_runs_path))
+        logger.warning(
+            f"{all_runs_path} already contains {n_existing} rows. New rows will be "
+            "APPENDED — analyze_results.py will see duplicates if you re-run the same "
+            "(task, method, scale, seed) triples. Delete the file or use --only-* "
+            "filters to avoid overlap."
+        )
+
     overall_t0 = time.time()
     completed, failed = 0, 0
     for i, (task, scale, method) in enumerate(runs, 1):

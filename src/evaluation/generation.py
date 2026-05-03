@@ -22,14 +22,17 @@ def _format_correct(reply: str) -> bool:
 
 
 def predict_batch(model, tokenizer, prompts: list[str],
-                  batch_size: int = 4, max_new_tokens: int = 256) -> list[str]:
+                  batch_size: int = 4, max_new_tokens: int = 256,
+                  max_input_length: int = 2048) -> list[str]:
+    """Token-level slicing at the padded prompt boundary (robust to left padding)."""
     model.eval()
     device = next(model.parameters()).device
     outs = []
     for i in range(0, len(prompts), batch_size):
         batch = prompts[i:i + batch_size]
         enc = tokenizer(batch, padding=True, truncation=True,
-                        max_length=1024, return_tensors="pt").to(device)
+                        max_length=max_input_length, return_tensors="pt").to(device)
+        prompt_len = enc["input_ids"].shape[1]
         with torch.no_grad():
             gen = model.generate(
                 **enc,
@@ -38,15 +41,8 @@ def predict_batch(model, tokenizer, prompts: list[str],
                 pad_token_id=tokenizer.pad_token_id,
             )
         for j in range(len(batch)):
-            input_len = enc["input_ids"][j].ne(tokenizer.pad_token_id).sum().item()
-            full = tokenizer.decode(gen[j], skip_special_tokens=True)
-            inp_dec = tokenizer.decode(enc["input_ids"][j][:input_len],
-                                       skip_special_tokens=True)
-            if full.startswith(inp_dec):
-                outs.append(full[len(inp_dec):].strip())
-            else:
-                outs.append(tokenizer.decode(gen[j][enc["input_ids"].shape[1]:],
-                                             skip_special_tokens=True).strip())
+            completion_ids = gen[j][prompt_len:]
+            outs.append(tokenizer.decode(completion_ids, skip_special_tokens=True).strip())
     return outs
 
 
