@@ -23,6 +23,14 @@ python scripts/02_prepare_all_data.py
 python scripts/03_smoke_test.py
 ```
 
+## Colab 一键跑(推荐)
+
+**最快方式**:打开 [colab_run.ipynb](https://colab.research.google.com/github/wangc22/ft-recommender-experiment/blob/main/colab_run.ipynb) → Runtime → Change runtime type → 选 L4 GPU → Runtime → Run all。
+
+前置:Colab Secrets 里加 `ANTHROPIC_API_KEY`(bitext 任务的 LLM judge 需要),否则只能跑 banking77 + cuad 共 16 个 run。
+
+预计 ~2 小时,~10-13 计算单元(L4)。
+
 ## 云端跑实验
 
 ```bash
