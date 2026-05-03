@@ -1,8 +1,14 @@
 """Run the full PEFT-method × task × scale matrix as subprocess invocations of run_one.
 
 Subprocess isolation prevents GPU memory accumulation across runs.
+
+**Resumability**: this script reads outputs/aggregated/all_runs.jsonl on startup
+and SKIPS any (task, method, scale, seed) triple that already has a recorded
+result. Use --force to re-run everything, --no-skip-completed to disable the
+cache check, or delete all_runs.jsonl to start fresh.
 """
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -20,6 +26,23 @@ from src.utils.logging import get_logger
 logger = get_logger("run_matrix")
 
 
+def _load_completed_keys(jsonl_path: Path) -> set[tuple]:
+    """Return set of (task, method, run_type, seed) tuples already recorded."""
+    keys: set[tuple] = set()
+    if not jsonl_path.exists() or jsonl_path.stat().st_size == 0:
+        return keys
+    for line in jsonl_path.open():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+            keys.add((r.get("task"), r.get("method"), r.get("run_type"), r.get("seed")))
+        except json.JSONDecodeError:
+            logger.warning(f"Skipping unparseable line in {jsonl_path}")
+    return keys
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/matrix.yaml")
@@ -28,6 +51,10 @@ def main():
                         help="Run only one task (banking77|bitext_support|cuad)")
     parser.add_argument("--only-method", default=None,
                         help="Run only one method (lora|dora|qlora|lora_plus)")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-run all triples even if they already have a recorded result.")
+    parser.add_argument("--no-skip-completed", action="store_true",
+                        help="Don't read all_runs.jsonl to skip completed runs (alias for --force).")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -39,30 +66,47 @@ def main():
     fail_fast = cfg.get("fail_fast", False)
     model_path = cfg.get("model_path", "models/Qwen2.5-1.5B-Instruct")
 
-    runs = list(product(tasks, scales, methods))
-    logger.info(f"Total runs: {len(runs)}")
+    all_runs_path = Path("outputs/aggregated/all_runs.jsonl")
+    skip_completed = not (args.force or args.no_skip_completed)
+    completed_keys = _load_completed_keys(all_runs_path) if skip_completed else set()
+
+    full_runs = list(product(tasks, scales, methods))
+    if skip_completed and completed_keys:
+        runs_to_do = [
+            (t, s, m) for (t, s, m) in full_runs
+            if (t, m, s, seed) not in completed_keys
+        ]
+    else:
+        runs_to_do = full_runs
+
+    n_total = len(full_runs)
+    n_skip = n_total - len(runs_to_do)
+    logger.info(f"Matrix scope: {n_total} runs total | {n_skip} already done (skipping) | {len(runs_to_do)} to run")
 
     if args.dry_run:
-        for i, (t, s, m) in enumerate(runs, 1):
-            print(f"  [{i}/{len(runs)}] task={t} scale={s} method={m} seed={seed}")
+        if n_skip:
+            print(f"\n[DRY-RUN] Skipping {n_skip} already-completed runs (in all_runs.jsonl):")
+            for (t, s, m) in full_runs:
+                if (t, m, s, seed) in completed_keys:
+                    print(f"  · SKIP   task={t} scale={s} method={m}")
+            print("")
+        print(f"[DRY-RUN] Will execute {len(runs_to_do)} runs:")
+        for i, (t, s, m) in enumerate(runs_to_do, 1):
+            print(f"  [{i}/{len(runs_to_do)}] task={t} scale={s} method={m} seed={seed}")
         return
 
-    # Pre-flight: warn if all_runs.jsonl already has rows (would cause duplicates
-    # in analyze_results.py and corrupt composite scores).
-    all_runs_path = Path("outputs/aggregated/all_runs.jsonl")
-    if all_runs_path.exists() and all_runs_path.stat().st_size > 0:
-        n_existing = sum(1 for _ in open(all_runs_path))
-        logger.warning(
-            f"{all_runs_path} already contains {n_existing} rows. New rows will be "
-            "APPENDED — analyze_results.py will see duplicates if you re-run the same "
-            "(task, method, scale, seed) triples. Delete the file or use --only-* "
-            "filters to avoid overlap."
-        )
+    if not runs_to_do:
+        logger.info("Nothing to do — all configured runs already complete in all_runs.jsonl.")
+        logger.info(f"To force a re-run: python scripts/run_matrix.py --force")
+        return
 
     overall_t0 = time.time()
     completed, failed = 0, 0
-    for i, (task, scale, method) in enumerate(runs, 1):
-        logger.info(f"\n{'='*60}\n[{i}/{len(runs)}] task={task} scale={scale} method={method}\n{'='*60}")
+    for i, (task, scale, method) in enumerate(runs_to_do, 1):
+        logger.info(
+            f"\n{'='*60}\n[{i}/{len(runs_to_do)}] task={task} scale={scale} "
+            f"method={method}{'  (resuming, skipped ' + str(n_skip) + ' completed)' if i == 1 and n_skip else ''}\n{'='*60}"
+        )
         cmd = [
             sys.executable, "-m", "src.training.run_one",
             "--task", task, "--method", method,
@@ -80,18 +124,20 @@ def main():
         else:
             completed += 1
             logger.info(f"Run done in {dt}s")
-        if i < len(runs):
+        if i < len(runs_to_do):
             time.sleep(sleep_s)
 
     total = round(time.time() - overall_t0, 1)
-    logger.info(f"\n=== Matrix done: {completed} completed / {failed} failed / {total}s total ===")
+    logger.info(
+        f"\n=== Matrix done: {completed} new completed / {failed} failed / "
+        f"{n_skip} previously-completed-skipped / {total}s wall-clock ==="
+    )
 
     # Per-run final summary table read from all_runs.jsonl, so the user has a
     # one-shot scannable view at the bottom of the cloud log.
     if all_runs_path.exists() and all_runs_path.stat().st_size > 0:
-        import json as _json
-        records = [_json.loads(l) for l in open(all_runs_path) if l.strip()]
-        # Keep only the runs from THIS matrix invocation (filter by tasks/methods/scales)
+        records = [json.loads(l) for l in open(all_runs_path) if l.strip()]
+        # Keep only the runs in current scope (this matrix's tasks/methods/scales)
         in_scope = [r for r in records
                     if r.get("task") in tasks and r.get("method") in methods
                     and r.get("run_type") in scales and r.get("seed") == seed]
