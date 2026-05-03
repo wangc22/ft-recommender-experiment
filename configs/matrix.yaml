@@ -1,0 +1,8 @@
+tasks: [banking77, bitext_support, cuad]
+methods: [lora, dora, qlora, lora_plus]
+scales: [pilot, larger]
+seed: 42
+
+inter_run_sleep_seconds: 5
+fail_fast: false
+model_path: models/Qwen2.5-1.5B-Instruct

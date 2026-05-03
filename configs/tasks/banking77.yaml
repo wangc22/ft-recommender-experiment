@@ -1,0 +1,12 @@
+kind: classification
+dataset_id: PolyAI/banking77
+max_length: 256
+
+training:
+  pilot_epochs: 1
+  larger_epochs: 2
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  weight_decay: 0.01

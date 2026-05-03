@@ -1,0 +1,12 @@
+kind: generation
+dataset_id: bitext/Bitext-customer-support-llm-chatbot-training-dataset
+max_length: 512
+
+training:
+  pilot_epochs: 1
+  larger_epochs: 2
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  weight_decay: 0.01
