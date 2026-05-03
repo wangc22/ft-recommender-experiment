@@ -40,6 +40,20 @@ def main():
             "Last-write-wins per (task, method, run_type, seed)."
         )
 
+    # Warn if any generation runs still have judge_pending — eval_quality will
+    # be a heuristic proxy (rouge + format) instead of the real LLM judge,
+    # which makes the bitext composite scores less trustworthy.
+    pending = [r for r in records if r.get("judge_pending")]
+    if pending:
+        logger.warning(
+            f"{len(pending)} run(s) still have judge_pending=True. Their "
+            "eval_quality_raw is a ROUGE+format proxy, NOT the real LLM judge. "
+            "Run `python scripts/run_judge.py` (with ANTHROPIC_API_KEY) to fill "
+            "in real scores, then re-run analyze_results."
+        )
+        for r in pending:
+            logger.warning(f"  · {r['task']}/{r['run_type']}/{r['method']}")
+
     scored = compute_composite(records)
 
     # Mark recommender selections (pilot top-1 by composite per task).

@@ -191,6 +191,7 @@ def run_one(task: str, method: str, scale: str, seed: int = 42,
         eval_quality_metric = "judge_avg_plus_format"
     save_json(eval_metrics, str(run_dir / "eval_metrics.json"))
 
+    judge_pending = bool(eval_metrics.get("judge_pending", False))
     record = {
         "task": task,
         "dataset": task_cfg["dataset_id"],
@@ -211,6 +212,7 @@ def run_one(task: str, method: str, scale: str, seed: int = 42,
         "trainable_params": param_stats["trainable_params"],
         "composite_score": None,
         "selected_by_recommender": False,
+        "judge_pending": judge_pending,
     }
     append_jsonl(record, ALL_RUNS_PATH)
 
