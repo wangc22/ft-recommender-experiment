@@ -38,13 +38,21 @@ def predict_batch(model, tokenizer, prompts: list[str],
     """
     model.eval()
     device = next(model.parameters()).device
+    # QLoRA path needs autocast at inference: prepare_model_for_kbit_training
+    # upcasts lm_head to fp32 for grad stability, but bnb 4-bit modules emit
+    # bf16 hidden states. Without autocast: 'expected scalar type Float but
+    # found BFloat16'. Harmless for non-QLoRA models (autocast is a no-op when
+    # weight already matches input dtype).
+    use_autocast = torch.cuda.is_available() and device.type == "cuda"
     outputs = []
     for i in range(0, len(prompts), batch_size):
         batch = prompts[i:i + batch_size]
         enc = tokenizer(batch, padding=True, truncation=True,
                         max_length=max_input_length, return_tensors="pt").to(device)
         prompt_len = enc["input_ids"].shape[1]  # padded length; same for all rows
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(
+            device_type="cuda", dtype=torch.bfloat16, enabled=use_autocast,
+        ):
             gen = model.generate(
                 **enc,
                 max_new_tokens=max_new_tokens,

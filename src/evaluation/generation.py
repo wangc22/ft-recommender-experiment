@@ -42,13 +42,17 @@ def predict_batch(model, tokenizer, prompts: list[str],
     """Token-level slicing at the padded prompt boundary (robust to left padding)."""
     model.eval()
     device = next(model.parameters()).device
+    # See classification.predict_batch for why autocast is needed (QLoRA path).
+    use_autocast = torch.cuda.is_available() and device.type == "cuda"
     outs = []
     for i in range(0, len(prompts), batch_size):
         batch = prompts[i:i + batch_size]
         enc = tokenizer(batch, padding=True, truncation=True,
                         max_length=max_input_length, return_tensors="pt").to(device)
         prompt_len = enc["input_ids"].shape[1]
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(
+            device_type="cuda", dtype=torch.bfloat16, enabled=use_autocast,
+        ):
             gen = model.generate(
                 **enc,
                 max_new_tokens=max_new_tokens,
