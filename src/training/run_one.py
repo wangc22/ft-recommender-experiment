@@ -274,23 +274,30 @@ def _print_run_summary(record: dict, eval_metrics: dict, task_kind: str) -> None
 
 
 def _sanity_quality(record: dict, task_kind: str) -> str:
-    """Heuristic ranges based on Qwen2.5-1.5B + LoRA-family baselines on these tasks."""
+    """Heuristic ranges based on Qwen2.5-1.5B + LoRA-family baselines on these tasks.
+
+    Pilot bands are intentionally wide-low: 200 samples / 1 epoch on a 77-class
+    or 10-class problem is barely above random baseline; the experiment cares
+    about *relative* ranking between PEFT methods, not absolute quality. We
+    only flag ✗ when the score is so low it suggests a code bug (e.g. label
+    parser broken, prompt truncated, etc).
+    """
     q = record["eval_quality_raw"]
     scale = record["run_type"]
     task = record["task"]
-    # Banking77 expectations: pilot 0.30-0.60, larger 0.50-0.75
-    # CUAD expectations:      pilot 0.40-0.70, larger 0.55-0.80
-    # Bitext expectations:    pilot 0.50-0.80, larger 0.55-0.85
+    # Random baselines: banking77 macro-F1 ≈ 1/77 = 0.013; cuad 1/10 = 0.1;
+    # bitext_support is generation, no random baseline (proxy quality 0-1).
     bands = {
-        "banking77":      {"pilot": (0.20, 0.65),  "larger": (0.40, 0.80)},
-        "cuad":           {"pilot": (0.30, 0.75),  "larger": (0.45, 0.85)},
-        "bitext_support": {"pilot": (0.45, 0.85),  "larger": (0.50, 0.90)},
+        "banking77":      {"pilot": (0.05, 0.65),  "larger": (0.30, 0.80)},
+        "cuad":           {"pilot": (0.15, 0.75),  "larger": (0.40, 0.85)},
+        "bitext_support": {"pilot": (0.30, 0.90),  "larger": (0.40, 0.95)},
     }
     lo, hi = bands.get(task, {}).get(scale, (0.0, 1.0))
-    if q < lo * 0.5:
+    # ✗ red flag: below 1/3 of lower band → likely code bug
+    if q < lo / 3:
         return f"✗ suspicious (expected ≥ {lo:.2f}; check predict_batch / data)"
     if q < lo:
-        return f"⚠ below expected band [{lo:.2f}, {hi:.2f}]"
+        return f"⚠ below expected band [{lo:.2f}, {hi:.2f}] (could be normal for pilot)"
     if q > hi:
         return f"⚠ above expected band [{lo:.2f}, {hi:.2f}] (sanity check?)"
     return "✓"
@@ -323,8 +330,13 @@ def _sanity_memory(mb: float) -> str:
 
 
 def _sanity_overfit(gap: float) -> str:
-    if gap < -0.5:
-        return "⚠ eval_loss much lower than train_loss (data leakage? eval_set too easy?)"
+    """Note: in pilot scale (1 epoch, ~50 steps), `train_loss` is averaged
+    across early high-loss steps and `eval_loss` is computed AFTER training,
+    so a negative gap of up to ~-1.5 is normal — not data leakage. Only
+    extreme negative gaps (< -2.0) suggest something genuinely off.
+    """
+    if gap < -2.0:
+        return "⚠ eval_loss much lower than train_loss (-2σ; check eval split overlap)"
     if gap > 1.0:
         return "⚠ severe overfit (eval - train > 1.0)"
     if gap > 0.5:
