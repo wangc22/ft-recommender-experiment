@@ -221,8 +221,113 @@ def run_one(task: str, method: str, scale: str, seed: int = 42,
     elif torch.backends.mps.is_available():
         torch.mps.empty_cache()
 
-    logger.info(f"[{task}/{scale}/{method}] DONE. eval_quality={eval_quality_raw}")
+    _print_run_summary(record, eval_metrics, task_kind)
     return record
+
+
+def _print_run_summary(record: dict, eval_metrics: dict, task_kind: str) -> None:
+    """Pretty-print a per-run summary so 24-run logs are scannable in the cloud.
+
+    Format: a fenced block with key metrics + heuristic sanity warnings (✓ ok,
+    ⚠ suspicious, ✗ likely broken). The block is also picked up easily by
+    `grep '=== RUN SUMMARY ==='` for post-hoc log analysis.
+    """
+    rk = f"[{record['task']}/{record['run_type']}/{record['method']}]"
+    quality_warn = _sanity_quality(record, task_kind)
+    loss_warn = _sanity_loss(record["train_loss"], record["eval_loss"])
+    mem_warn = _sanity_memory(record["memory_cost"])
+    overfit_warn = _sanity_overfit(record["overfit_gap"])
+
+    lines = [
+        "",
+        "=" * 72,
+        f"=== RUN SUMMARY {rk} ===",
+        "-" * 72,
+        f"  eval_quality_raw   : {record['eval_quality_raw']:.4f}  "
+        f"({record['eval_quality_metric_name']}) {quality_warn}",
+        f"  train_loss         : {record['train_loss']:.4f} {loss_warn[0]}",
+        f"  eval_loss          : {record['eval_loss']:.4f} {loss_warn[1]}",
+        f"  overfit_gap        : {record['overfit_gap']:+.4f} {overfit_warn}",
+        f"  training_time      : {record['training_time']:.1f}s",
+        f"  memory_cost        : {record['memory_cost']:.0f} MB {mem_warn}",
+        f"  trainable_params   : {record['trainable_params']:,}  "
+        f"({record['train_size']} train / {record['val_size']} val)",
+    ]
+    if task_kind == "classification":
+        lines.append(
+            f"  invalid_predictions: {eval_metrics.get('n_invalid', '?')} / "
+            f"{eval_metrics.get('n_total', '?')}  "
+            f"(accuracy={eval_metrics.get('accuracy', '?'):.4f})"
+        )
+    else:
+        lines.append(
+            f"  judge / format     : avg={eval_metrics.get('judge_avg', '?')}  "
+            f"format_pass={eval_metrics.get('format_pass_rate', '?')}  "
+            f"n_valid_judge={eval_metrics.get('n_valid_judge', '?')}/"
+            f"{eval_metrics.get('n_total', '?')}"
+        )
+    lines.append("=" * 72)
+    lines.append("")
+    print("\n".join(lines))
+
+
+def _sanity_quality(record: dict, task_kind: str) -> str:
+    """Heuristic ranges based on Qwen2.5-1.5B + LoRA-family baselines on these tasks."""
+    q = record["eval_quality_raw"]
+    scale = record["run_type"]
+    task = record["task"]
+    # Banking77 expectations: pilot 0.30-0.60, larger 0.50-0.75
+    # CUAD expectations:      pilot 0.40-0.70, larger 0.55-0.80
+    # Bitext expectations:    pilot 0.50-0.80, larger 0.55-0.85
+    bands = {
+        "banking77":      {"pilot": (0.20, 0.65),  "larger": (0.40, 0.80)},
+        "cuad":           {"pilot": (0.30, 0.75),  "larger": (0.45, 0.85)},
+        "bitext_support": {"pilot": (0.45, 0.85),  "larger": (0.50, 0.90)},
+    }
+    lo, hi = bands.get(task, {}).get(scale, (0.0, 1.0))
+    if q < lo * 0.5:
+        return f"✗ suspicious (expected ≥ {lo:.2f}; check predict_batch / data)"
+    if q < lo:
+        return f"⚠ below expected band [{lo:.2f}, {hi:.2f}]"
+    if q > hi:
+        return f"⚠ above expected band [{lo:.2f}, {hi:.2f}] (sanity check?)"
+    return "✓"
+
+
+def _sanity_loss(train_loss: float, eval_loss: float) -> tuple[str, str]:
+    train_tag = "✓"
+    eval_tag = "✓"
+    if train_loss > 5.0:
+        train_tag = "✗ unusually high (>5.0; possibly diverged)"
+    elif train_loss > 3.5:
+        train_tag = "⚠ on the high side"
+    if eval_loss > 5.0:
+        eval_tag = "✗ unusually high (>5.0)"
+    elif eval_loss > 3.5:
+        eval_tag = "⚠ on the high side"
+    if eval_loss != eval_loss:  # NaN
+        eval_tag = "✗ NaN — training likely diverged"
+    return train_tag, eval_tag
+
+
+def _sanity_memory(mb: float) -> str:
+    if mb < 1000:
+        return "⚠ unusually low (CPU/MPS measurement may be unreliable)"
+    if mb > 20000:
+        return "✗ over 20GB — investigate OOM risk"
+    if mb > 12000:
+        return "⚠ above 12GB"
+    return "✓"
+
+
+def _sanity_overfit(gap: float) -> str:
+    if gap < -0.5:
+        return "⚠ eval_loss much lower than train_loss (data leakage? eval_set too easy?)"
+    if gap > 1.0:
+        return "⚠ severe overfit (eval - train > 1.0)"
+    if gap > 0.5:
+        return "⚠ mild overfit"
+    return "✓"
 
 
 def main():

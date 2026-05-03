@@ -86,6 +86,39 @@ def main():
     total = round(time.time() - overall_t0, 1)
     logger.info(f"\n=== Matrix done: {completed} completed / {failed} failed / {total}s total ===")
 
+    # Per-run final summary table read from all_runs.jsonl, so the user has a
+    # one-shot scannable view at the bottom of the cloud log.
+    if all_runs_path.exists() and all_runs_path.stat().st_size > 0:
+        import json as _json
+        records = [_json.loads(l) for l in open(all_runs_path) if l.strip()]
+        # Keep only the runs from THIS matrix invocation (filter by tasks/methods/scales)
+        in_scope = [r for r in records
+                    if r.get("task") in tasks and r.get("method") in methods
+                    and r.get("run_type") in scales and r.get("seed") == seed]
+        # Last-write-wins per (task, method, run_type, seed)
+        by_key: dict = {}
+        for r in in_scope:
+            by_key[(r["task"], r["method"], r["run_type"], r["seed"])] = r
+        in_scope = list(by_key.values())
+
+        if in_scope:
+            print("\n" + "=" * 88)
+            print("=== ALL RUNS SUMMARY TABLE ===")
+            print("-" * 88)
+            print(f"  {'task':<16} {'scale':<7} {'method':<10} "
+                  f"{'eval_q':>7} {'train_l':>8} {'eval_l':>8} "
+                  f"{'time_s':>7} {'mem_MB':>8}")
+            print("-" * 88)
+            in_scope.sort(key=lambda r: (r["task"], r["run_type"], r["method"]))
+            for r in in_scope:
+                print(f"  {r['task']:<16} {r['run_type']:<7} {r['method']:<10} "
+                      f"{r['eval_quality_raw']:>7.4f} "
+                      f"{r['train_loss']:>8.4f} {r['eval_loss']:>8.4f} "
+                      f"{r['training_time']:>7.1f} {r['memory_cost']:>8.0f}")
+            print("=" * 88)
+            print(f"  Next: python scripts/analyze_results.py")
+            print("=" * 88)
+
 
 if __name__ == "__main__":
     main()
