@@ -1,3 +1,7 @@
+# NOTE: Colab pre-installs torchvision/torchaudio bound to its own torch version.
+# We do NOT pull in torchvision/torchaudio (this project is text-only); but Colab
+# will already have them and they ABI-break when torch is upgraded. Install
+# script (scripts/colab_bootstrap.sh) uninstalls them first.
 torch==2.8.0
 transformers==4.57.6
 trl==0.24.0
